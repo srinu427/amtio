@@ -52,17 +52,7 @@ async fn size_inner(path: &str) -> std::io::Result<u64> {
         for p in work.drain(..) {
             js.spawn(do_work(p));
         }
-        loop {
-            let Some(res) = js.join_next().await else {
-                break;
-            };
-            let res = match res {
-                Ok(r) => r,
-                Err(e) => {
-                    log::warn!("async task wait failed: {e}");
-                    continue;
-                }
-            };
+        for res in js.join_all().await {
             match res {
                 Ok((size, new_work)) => {
                     total_size += size;
