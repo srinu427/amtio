@@ -60,7 +60,7 @@ async fn size_inner(path: &str) -> std::io::Result<u64> {
                     work.extend(new_work);
                 }
                 Err(e) => {
-                    eprintln!("getting size of entry failed: {e}")
+                    log::warn!("getting size of entry failed: {e}")
                 }
             }
         }
@@ -95,7 +95,7 @@ pub fn size(path: &str, threads: usize, tasks: usize) -> std::io::Result<SizeRes
                 name: p.to_string_lossy().to_string(),
                 size,
             }),
-            Err(e) => eprintln!("size calculation of {:?} failed: {e}", &p),
+            Err(e) => log::warn!("size calculation of {:?} failed: {e}", &p),
         }
     }
     Ok(out)
