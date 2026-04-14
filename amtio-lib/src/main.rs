@@ -7,7 +7,7 @@ fn human_size(size: u64) -> String {
     let mut size_div = size;
     let mut size_rem = 0;
     while size_div >= 1024 {
-        (size_div, size_rem) = (size_div % 1024, size_div % 1024);
+        (size_div, size_rem) = (size_div / 1024, size_div % 1024);
         size_pref += 1;
     }
     format!(
