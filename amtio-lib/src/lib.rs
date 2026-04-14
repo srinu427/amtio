@@ -1,4 +1,3 @@
-use glob::glob;
 use tokio::task::JoinSet;
 
 #[derive(Debug, Clone)]
@@ -16,7 +15,7 @@ fn wrap_io_err(e: std::io::Error, path: &str) -> std::io::Error {
     std::io::Error::new(e.kind(), format!("io error at path {path}: {e}"))
 }
 
-async fn do_work(path: String) -> std::io::Result<(u64, Vec<String>)> {
+async fn do_size_work(path: String) -> std::io::Result<(u64, Vec<String>)> {
     let meta = tokio::fs::metadata(&path)
         .await
         .map_err(|e| wrap_io_err(e, &path))?;
@@ -44,13 +43,13 @@ async fn do_work(path: String) -> std::io::Result<(u64, Vec<String>)> {
     }
 }
 
-async fn size_inner(path: &str) -> std::io::Result<u64> {
+pub async fn size(path: &str) -> std::io::Result<u64> {
     let mut total_size = 0;
     let mut work = vec![path.to_string()];
     while !work.is_empty() {
         let mut js = JoinSet::new();
         for p in work.drain(..) {
-            js.spawn(do_work(p));
+            js.spawn(do_size_work(p));
         }
         for res in js.join_all().await {
             match res {
@@ -65,37 +64,4 @@ async fn size_inner(path: &str) -> std::io::Result<u64> {
         }
     }
     Ok(total_size)
-}
-
-pub fn size(path: &str, threads: usize, tasks: usize) -> std::io::Result<SizeRes> {
-    let globbed_paths: Vec<_> = glob(path)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.msg))?
-        .into_iter()
-        .filter_map(|x| x.ok())
-        .collect();
-    let thread_pool = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(threads)
-        .max_blocking_threads(tasks)
-        .build()
-    {
-        Ok(tp) => tp,
-        Err(e) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                format!("tokio threadpool creation failed: {e}"),
-            ));
-        }
-    };
-    let mut out = SizeRes { sizes: vec![] };
-    for p in globbed_paths.into_iter() {
-        let res = thread_pool.block_on(size_inner(p.to_string_lossy().as_ref()));
-        match res {
-            Ok(size) => out.sizes.push(SizeInfo {
-                name: p.to_string_lossy().to_string(),
-                size,
-            }),
-            Err(e) => log::warn!("size calculation of {:?} failed: {e}", &p),
-        }
-    }
-    Ok(out)
 }

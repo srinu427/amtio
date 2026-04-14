@@ -12,6 +12,7 @@ name = "amtio_cli"
 path = "src/main.rs"
 
 [dependencies]
+argh = "0.1.19"
 glob = "0.3.3"
 log = "0.4.29"
 tokio = { version = "1.51.1", features = ["fs", "mio", "rt", "rt-multi-thread"] }
