@@ -17,7 +17,6 @@ async fn do_size_work(path: std::path::PathBuf) -> std::io::Result<(u64, Vec<std
     let meta = tokio::fs::metadata(&path)
         .await
         .map_err(|e| wrap_io_err(e, &path))?;
-    println!("size of {:?} is {}", &path, meta.len());
     if meta.is_dir() {
         let mut dir_reader = tokio::fs::read_dir(&path)
             .await
@@ -53,7 +52,6 @@ pub async fn size(path: &str) -> std::io::Result<u64> {
             Ok(task_res) => match task_res {
                 Ok((size, work)) => {
                     total_size += size;
-                    println!("total_size: {total_size}");
                     for path in work {
                         js.spawn(do_size_work(path));
                     }
