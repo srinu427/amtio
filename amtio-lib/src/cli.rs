@@ -51,11 +51,26 @@ pub struct CopyArgs {
     threads: Option<usize>,
 }
 
+#[derive(Debug, FromArgs, PartialEq)]
+/// Remove files/folders. Glob/Wildcard strings are supported
+#[argh(subcommand, name = "remove")]
+pub struct RemoveArgs {
+    #[argh(positional)]
+    input_path: String,
+    /// number of workers(OS threads) to use
+    #[argh(option, short = 'w')]
+    workers: Option<usize>,
+    /// number of async threads to use
+    #[argh(option, short = 't')]
+    threads: Option<usize>,
+}
+
 #[derive(FromArgs, PartialEq, Debug)]
 #[argh(subcommand)]
 enum CommandEnum {
     Size(SizeArgs),
     Copy(CopyArgs),
+    Remove(RemoveArgs),
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
@@ -63,6 +78,22 @@ enum CommandEnum {
 struct CliArgs {
     #[argh(subcommand)]
     nested: CommandEnum,
+}
+
+fn init_thread_pool(
+    workers: Option<usize>,
+    threads: Option<usize>,
+) -> Result<tokio::runtime::Runtime, String> {
+    let mut thread_pool = tokio::runtime::Builder::new_multi_thread();
+    if let Some(workers) = workers {
+        thread_pool.worker_threads(workers);
+    }
+    if let Some(threads) = threads {
+        thread_pool.max_blocking_threads(threads);
+    }
+    thread_pool
+        .build()
+        .map_err(|e| format!("async runtime init failed: {e}"))
 }
 
 pub fn main() {
@@ -77,17 +108,10 @@ pub fn main() {
                     std::process::exit(1);
                 }
             };
-            let mut thread_pool = tokio::runtime::Builder::new_multi_thread();
-            if let Some(workers) = size_args.workers {
-                thread_pool.worker_threads(workers);
-            }
-            if let Some(threads) = size_args.threads {
-                thread_pool.max_blocking_threads(threads);
-            }
-            let thread_pool = match thread_pool.build() {
+            let thread_pool = match init_thread_pool(size_args.workers, size_args.threads) {
                 Ok(tp) => tp,
                 Err(e) => {
-                    eprintln!("async runtime init failed: {e}");
+                    eprintln!("{e}");
                     std::process::exit(1);
                 }
             };
@@ -99,40 +123,41 @@ pub fn main() {
             }
         }
         CommandEnum::Copy(copy_args) => {
-            let dst_path = if copy_args.dst.ends_with("/") {
-                let src_path = std::path::Path::new(&copy_args.src);
-                let src_bname = match src_path.file_name() {
-                    Some(bname_oss) => bname_oss.to_string_lossy().to_string(),
-                    None => {
-                        eprintln!("cant find basename of {:?}", src_path);
-                        std::process::exit(1);
-                    }
-                };
-                std::path::Path::new(&copy_args.dst).join(src_bname)
-            } else {
-                std::path::PathBuf::from(&copy_args.dst)
-            };
-            let mut thread_pool = tokio::runtime::Builder::new_multi_thread();
-            if let Some(workers) = copy_args.workers {
-                thread_pool.worker_threads(workers);
-            }
-            if let Some(threads) = copy_args.threads {
-                thread_pool.max_blocking_threads(threads);
-            }
-            let thread_pool = match thread_pool.build() {
+            let thread_pool = match init_thread_pool(copy_args.workers, copy_args.threads) {
                 Ok(tp) => tp,
                 Err(e) => {
-                    eprintln!("async runtime init failed: {e}");
+                    eprintln!("{e}");
                     std::process::exit(1);
                 }
             };
             if let Err(e) = thread_pool.block_on(amtio_lib::copy(
-                std::path::PathBuf::from(&copy_args.src),
-                dst_path,
+                &copy_args.src,
+                &copy_args.dst,
                 copy_args.chunk_size.unwrap_or(DEFAULT_COPY_CHUNK_SIZE),
             )) {
                 eprintln!("copying {} to {} failed: {e}", copy_args.src, copy_args.dst);
             };
+        }
+        CommandEnum::Remove(remove_args) => {
+            let globbed_paths: Vec<_> = match glob::glob(&remove_args.input_path) {
+                Ok(glob_res) => glob_res.into_iter().filter_map(|x| x.ok()).collect(),
+                Err(e) => {
+                    eprintln!("globbing {} failed: {e}", remove_args.input_path);
+                    std::process::exit(1);
+                }
+            };
+            let thread_pool = match init_thread_pool(remove_args.workers, remove_args.threads) {
+                Ok(tp) => tp,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            for path in globbed_paths {
+                if let Err(e) = thread_pool.block_on(amtio_lib::remove(&path.to_string_lossy())) {
+                    eprintln!("finding size of {} failed: {e}", path.to_string_lossy());
+                };
+            }
         }
     }
 }
