@@ -8,8 +8,8 @@ name = "amtio_lib"
 path = "src/lib.rs"
 
 [[bin]]
-name = "amtio_cli"
-path = "src/main.rs"
+name = "amtio"
+path = "src/cli.rs"
 
 [dependencies]
 argh = "0.1.19"
