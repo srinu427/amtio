@@ -15,9 +15,16 @@ fn wrap_io_err(e: std::io::Error, path: &std::path::Path) -> std::io::Error {
     std::io::Error::new(e.kind(), format!("io error at path {path:?}: {e}"))
 }
 
+fn wrap_join_err(e: tokio::task::JoinError, ctx: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::BrokenPipe,
+        format!("async wait failed. ctx: {:?}: {e}", ctx),
+    )
+}
+
 async fn list_dir(path: &std::path::Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
     let path_owned = path.to_path_buf();
-    match tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let dir_reader = std::fs::read_dir(&path_owned).map_err(|e| wrap_io_err(e, &path_owned))?;
         let mut entries = vec![];
         for ls_res in dir_reader {
@@ -27,49 +34,43 @@ async fn list_dir(path: &std::path::Path) -> std::io::Result<Vec<std::fs::DirEnt
         Ok(entries)
     })
     .await
-    {
-        Ok(res) => res,
-        Err(e) => Err(std::io::Error::new(
-            std::io::ErrorKind::BrokenPipe,
-            format!("async wait failed while listing {:?}: {e}", &path),
-        )),
-    }
+    .map_err(|e| wrap_join_err(e, &format!("while listing {:?}", &path)))?
 }
 
 async fn get_metadata(path: &std::path::Path) -> std::io::Result<std::fs::Metadata> {
     let path_owned = path.to_path_buf();
-    match tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         path_owned
             .metadata()
             .map_err(|e| wrap_io_err(e, &path_owned))
     })
     .await
-    {
-        Ok(res) => res,
-        Err(e) => Err(std::io::Error::new(
-            std::io::ErrorKind::BrokenPipe,
-            format!(
-                "async wait failed while getting metadata of {:?}: {e}",
-                &path
-            ),
-        )),
-    }
+    .map_err(|e| wrap_join_err(e, &format!("while getting metadata of {:?}", &path)))?
 }
 
 async fn get_metadata_de(de: std::fs::DirEntry) -> std::io::Result<std::fs::Metadata> {
     let de_path = de.path();
-    match tokio::task::spawn_blocking(move || de.metadata().map_err(|e| wrap_io_err(e, &de.path())))
+    tokio::task::spawn_blocking(move || de.metadata().map_err(|e| wrap_io_err(e, &de.path())))
         .await
-    {
-        Ok(res) => res,
-        Err(e) => Err(std::io::Error::new(
-            std::io::ErrorKind::BrokenPipe,
-            format!(
-                "async wait failed while getting metadata of {:?}: {e}",
-                &de_path
-            ),
-        )),
-    }
+        .map_err(|e| wrap_join_err(e, &format!("while getting metadata of {:?}", &de_path)))?
+}
+
+async fn rmdir(path: &std::path::Path) -> std::io::Result<()> {
+    let path_owned = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        std::fs::remove_dir(&path_owned).map_err(|e| wrap_io_err(e, &path_owned))
+    })
+    .await
+    .map_err(|e| wrap_join_err(e, &format!("while removing {:?}", &path)))?
+}
+
+async fn rmfile(path: &std::path::Path) -> std::io::Result<()> {
+    let path_owned = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        std::fs::remove_file(&path_owned).map_err(|e| wrap_io_err(e, &path_owned))
+    })
+    .await
+    .map_err(|e| wrap_join_err(e, &format!("while removing {:?}", &path)))?
 }
 
 async fn do_size_work(
@@ -162,22 +163,16 @@ async fn copy_file(
         join_set.spawn(copy_file_chunk(src.clone(), dst.clone(), offset, copy_size));
     }
     while let Some(join_res) = join_set.join_next().await {
-        match join_res {
-            Ok(copy_res) => {
-                if let Err(e) = copy_res {
-                    join_set.abort_all();
-                    return Err(e);
-                }
-            }
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    format!(
-                        "async wait failed while copying data from {:?} to {:?}: {e}",
-                        &src, &dst
-                    ),
-                ));
-            }
+        let copy_res = join_res.map_err(|e| {
+            wrap_join_err(
+                e,
+                &format!("while copying data from {:?} to {:?}", &src, &dst),
+            )
+        })?;
+
+        if let Err(e) = copy_res {
+            join_set.abort_all();
+            return Err(e);
         }
     }
     Ok(())
@@ -262,25 +257,18 @@ fn do_remove_work(
             let mut child_delete_error = false;
 
             while let Some(join_res) = js.join_next().await {
-                match join_res {
-                    Ok(task_res) => {
-                        if let Err(e) = task_res {
-                            log::warn!("deleting entry failed: {e}");
-                            if !child_delete_error {
-                                child_delete_error = true;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::BrokenPipe,
-                            format!("async wait failed while deleting data {:?}: {e}", &path),
-                        ));
+                let task_res = join_res
+                    .map_err(|e| wrap_join_err(e, &format!("while deleting data {:?}", &path)))?;
+
+                if let Err(e) = task_res {
+                    log::warn!("deleting entry failed: {e}");
+                    if !child_delete_error {
+                        child_delete_error = true;
                     }
                 }
             }
             if !child_delete_error {
-                std::fs::remove_dir(&path).map_err(|e| wrap_io_err(e, &path))?;
+                rmdir(&path).await?;
             } else {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::DirectoryNotEmpty,
@@ -291,7 +279,7 @@ fn do_remove_work(
                 ));
             }
         } else {
-            std::fs::remove_file(&path).map_err(|e| wrap_io_err(e, &path))?;
+            rmfile(&path).await?;
         }
         Ok(())
     })
