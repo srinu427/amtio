@@ -22,55 +22,46 @@ fn wrap_join_err(e: tokio::task::JoinError, ctx: &str) -> std::io::Error {
     )
 }
 
-async fn list_dir(path: &std::path::Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
-    let path_owned = path.to_path_buf();
+async fn list_dir(path: std::path::PathBuf) -> std::io::Result<Vec<std::fs::DirEntry>> {
     tokio::task::spawn_blocking(move || {
-        let dir_reader = std::fs::read_dir(&path_owned).map_err(|e| wrap_io_err(e, &path_owned))?;
+        let dir_reader = std::fs::read_dir(&path).map_err(|e| wrap_io_err(e, &path))?;
         let mut entries = vec![];
         for ls_res in dir_reader {
-            let e_res = ls_res.map_err(|e| wrap_io_err(e, &path_owned))?;
+            let e_res = ls_res.map_err(|e| wrap_io_err(e, &path))?;
             entries.push(e_res);
         }
         Ok(entries)
     })
     .await
-    .map_err(|e| wrap_join_err(e, &format!("while listing {:?}", &path)))?
+    .map_err(|e| wrap_join_err(e, "while listing"))?
 }
 
-async fn get_metadata(path: &std::path::Path) -> std::io::Result<std::fs::Metadata> {
-    let path_owned = path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        path_owned
-            .metadata()
-            .map_err(|e| wrap_io_err(e, &path_owned))
-    })
-    .await
-    .map_err(|e| wrap_join_err(e, &format!("while getting metadata of {:?}", &path)))?
+async fn get_metadata(path: std::path::PathBuf) -> std::io::Result<std::fs::Metadata> {
+    tokio::task::spawn_blocking(move || path.metadata().map_err(|e| wrap_io_err(e, &path)))
+        .await
+        .map_err(|e| wrap_join_err(e, "while getting metadata"))?
 }
 
 async fn get_metadata_de(de: std::fs::DirEntry) -> std::io::Result<std::fs::Metadata> {
-    let de_path = de.path();
     tokio::task::spawn_blocking(move || de.metadata().map_err(|e| wrap_io_err(e, &de.path())))
         .await
-        .map_err(|e| wrap_join_err(e, &format!("while getting metadata of {:?}", &de_path)))?
+        .map_err(|e| wrap_join_err(e, "while getting metadata"))?
 }
 
-async fn rmdir(path: &std::path::Path) -> std::io::Result<()> {
-    let path_owned = path.to_path_buf();
+async fn rmdir(path: std::path::PathBuf) -> std::io::Result<()> {
     tokio::task::spawn_blocking(move || {
-        std::fs::remove_dir(&path_owned).map_err(|e| wrap_io_err(e, &path_owned))
+        std::fs::remove_dir(&path).map_err(|e| wrap_io_err(e, &path))
     })
     .await
-    .map_err(|e| wrap_join_err(e, &format!("while removing {:?}", &path)))?
+    .map_err(|e| wrap_join_err(e, "while removing"))?
 }
 
-async fn rmfile(path: &std::path::Path) -> std::io::Result<()> {
-    let path_owned = path.to_path_buf();
+async fn rmfile(path: std::path::PathBuf) -> std::io::Result<()> {
     tokio::task::spawn_blocking(move || {
-        std::fs::remove_file(&path_owned).map_err(|e| wrap_io_err(e, &path_owned))
+        std::fs::remove_file(&path).map_err(|e| wrap_io_err(e, &path))
     })
     .await
-    .map_err(|e| wrap_join_err(e, &format!("while removing {:?}", &path)))?
+    .map_err(|e| wrap_join_err(e, "while removing"))?
 }
 
 async fn do_size_work(
@@ -78,7 +69,7 @@ async fn do_size_work(
     meta: std::fs::Metadata,
 ) -> std::io::Result<(u64, Vec<std::fs::DirEntry>)> {
     if meta.is_dir() && !meta.is_symlink() {
-        let entries = list_dir(&path).await?;
+        let entries = list_dir(path).await?;
         let mut work = Vec::with_capacity(entries.len());
         for e_res in entries {
             work.push(e_res);
@@ -92,7 +83,7 @@ async fn do_size_work(
 pub async fn size(path: &str) -> std::io::Result<u64> {
     let mut total_size = 0;
     let path_pb = std::path::PathBuf::from(path);
-    let path_meta = get_metadata(&path_pb).await?;
+    let path_meta = get_metadata(path_pb.clone()).await?;
     let mut js = tokio::task::JoinSet::new();
     js.spawn(do_size_work(path_pb, path_meta));
     while let Some(join_res) = js.join_next().await {
@@ -186,7 +177,7 @@ async fn do_copy_work(
 ) -> std::io::Result<Vec<(std::fs::Metadata, std::path::PathBuf, std::path::PathBuf)>> {
     if src_meta.is_dir() && !src_meta.is_symlink() {
         std::fs::create_dir_all(&dst).map_err(|e| wrap_io_err(e, &src))?;
-        let entries = list_dir(&src).await?;
+        let entries = list_dir(src).await?;
         let mut work = Vec::with_capacity(entries.len());
         for entry in entries {
             let e_path = entry.path();
@@ -204,7 +195,7 @@ async fn do_copy_work(
 
 pub async fn copy(src: &str, dst: &str, chunk_size: u64) -> std::io::Result<()> {
     let src_path = std::path::Path::new(&src);
-    let src_meta = get_metadata(src_path).await?;
+    let src_meta = get_metadata(src_path.to_path_buf()).await?;
     let dst_pathbuf = if dst.ends_with("/") {
         let src_bname = match src_path.file_name() {
             Some(bname_oss) => bname_oss.to_string_lossy().to_string(),
@@ -246,7 +237,7 @@ fn do_remove_work(
 ) -> std::pin::Pin<Box<dyn Future<Output = std::io::Result<()>> + Send>> {
     Box::pin(async move {
         if meta.is_dir() && !meta.is_symlink() {
-            let entries = list_dir(&path).await?;
+            let entries = list_dir(path.clone()).await?;
             let mut js = tokio::task::JoinSet::new();
             for entry in entries {
                 let e_path = entry.path();
@@ -268,7 +259,7 @@ fn do_remove_work(
                 }
             }
             if !child_delete_error {
-                rmdir(&path).await?;
+                rmdir(path).await?;
             } else {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::DirectoryNotEmpty,
@@ -279,7 +270,7 @@ fn do_remove_work(
                 ));
             }
         } else {
-            rmfile(&path).await?;
+            rmfile(path).await?;
         }
         Ok(())
     })
@@ -287,7 +278,7 @@ fn do_remove_work(
 
 pub async fn remove(path: &str) -> std::io::Result<()> {
     let path_pb = std::path::PathBuf::from(path);
-    let path_meta = get_metadata(&path_pb).await?;
+    let path_meta = get_metadata(path_pb.clone()).await?;
     do_remove_work(path_pb, path_meta).await?;
     Ok(())
 }
