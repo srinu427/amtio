@@ -128,7 +128,7 @@ pub fn main() {
                 thread_pool.block_on(async move {
                     let curr_size = Arc::new(AtomicU64::new(0));
                     let stop_print = Arc::new(AtomicBool::new(false));
-                    let stop_print_pt = Arc::new(AtomicBool::new(false));
+                    let stop_print_pt = stop_print.clone();
                     let curr_size_pt = curr_size.clone();
                     let path_pt = path.clone();
                     let jh = tokio::spawn(async move {
