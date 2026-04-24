@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
 use argh::FromArgs;
@@ -134,11 +137,12 @@ pub fn main() {
                                 break;
                             }
                             let size = curr_size_pt.load(Ordering::Relaxed);
-                            println!(
-                                "{} - {} (still computing)",
+                            print!(
+                                "{} - {} (still computing)\r",
                                 human_size(size),
                                 path_pt.to_string_lossy()
                             );
+                            tokio::time::sleep(Duration::from_millis(500)).await;
                         }
                     });
                     match amtio_lib::size(&path.to_string_lossy(), curr_size).await {
