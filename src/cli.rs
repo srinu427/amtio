@@ -149,6 +149,7 @@ pub fn main() {
                         Ok(size) => {
                             stop_print.store(true, Ordering::Release);
                             let _ = jh.await;
+                            println!("");
                             println!("{} - {}", human_size(size), path.to_string_lossy())
                         }
                         Err(e) => {
