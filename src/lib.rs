@@ -249,9 +249,11 @@ fn do_remove_work(
             let entries = list_dir(path.clone()).await?;
             let mut js = tokio::task::JoinSet::new();
             for entry in entries {
-                let e_path = entry.path();
-                let e_meta = get_metadata_de(entry).await?;
-                js.spawn(do_remove_work(e_path, e_meta));
+                js.spawn(async move {
+                    let e_path = entry.path();
+                    let e_meta = get_metadata_de(entry).await?;
+                    do_remove_work(e_path, e_meta).await
+                });
             }
 
             let mut child_delete_error = false;
