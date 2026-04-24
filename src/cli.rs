@@ -93,6 +93,7 @@ fn init_thread_pool(
     threads: Option<usize>,
 ) -> Result<tokio::runtime::Runtime, String> {
     let mut thread_pool = tokio::runtime::Builder::new_multi_thread();
+    thread_pool.enable_time();
     if let Some(workers) = workers {
         thread_pool.worker_threads(workers);
     }
