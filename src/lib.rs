@@ -80,7 +80,10 @@ async fn do_size_work(
     }
 }
 
-pub async fn size(path: &str) -> std::io::Result<u64> {
+pub async fn size(
+    path: &str,
+    tracker: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) -> std::io::Result<u64> {
     let mut total_size = 0;
     let path_pb = std::path::PathBuf::from(path);
     let mut js = tokio::task::JoinSet::new();
@@ -93,6 +96,7 @@ pub async fn size(path: &str) -> std::io::Result<u64> {
             Ok(task_res) => match task_res {
                 Ok((size, work)) => {
                     total_size += size;
+                    tracker.fetch_add(size, std::sync::atomic::Ordering::Relaxed);
                     for dir_entry in work {
                         js.spawn(async move {
                             let e_path = dir_entry.path();

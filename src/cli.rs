@@ -1,3 +1,8 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
+
 use argh::FromArgs;
 
 static SIZE_PREFS: &[&'static str] = &["B", "KB", "MB", "GB", "TB"];
@@ -116,10 +121,37 @@ pub fn main() {
                 }
             };
             for path in globbed_paths {
-                match thread_pool.block_on(amtio_lib::size(&path.to_string_lossy())) {
-                    Ok(size) => println!("{} - {}", human_size(size), path.to_string_lossy()),
-                    Err(e) => eprintln!("finding size of {} failed: {e}", path.to_string_lossy()),
-                };
+                thread_pool.block_on(async move {
+                    let curr_size = Arc::new(AtomicU64::new(0));
+                    let stop_print = Arc::new(AtomicBool::new(false));
+                    let stop_print_pt = Arc::new(AtomicBool::new(false));
+                    let curr_size_pt = curr_size.clone();
+                    let path_pt = path.clone();
+                    let jh = tokio::spawn(async move {
+                        loop {
+                            let stop = stop_print_pt.load(Ordering::Acquire);
+                            if stop {
+                                break;
+                            }
+                            let size = curr_size_pt.load(Ordering::Relaxed);
+                            println!(
+                                "{} - {} (still computing)",
+                                human_size(size),
+                                path_pt.to_string_lossy()
+                            );
+                        }
+                    });
+                    match amtio_lib::size(&path.to_string_lossy(), curr_size).await {
+                        Ok(size) => {
+                            stop_print.store(true, Ordering::Release);
+                            let _ = jh.await;
+                            println!("{} - {}", human_size(size), path.to_string_lossy())
+                        }
+                        Err(e) => {
+                            eprintln!("finding size of {} failed: {e}", path.to_string_lossy())
+                        }
+                    }
+                });
             }
         }
         CommandEnum::Copy(copy_args) => {
