@@ -139,7 +139,7 @@ pub fn main() {
                             }
                             let size = curr_size_pt.load(Ordering::Relaxed);
                             print!(
-                                "{} - {} (still computing)\r",
+                                "{} - {} (still computing)     \r",
                                 human_size(size),
                                 path_pt.to_string_lossy()
                             );
