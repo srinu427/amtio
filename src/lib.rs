@@ -36,6 +36,42 @@ async fn list_dir(path: &std::path::Path) -> std::io::Result<Vec<std::fs::DirEnt
     }
 }
 
+async fn get_metadata(path: &std::path::Path) -> std::io::Result<std::fs::Metadata> {
+    let path_owned = path.to_path_buf();
+    match tokio::task::spawn_blocking(move || {
+        path_owned
+            .metadata()
+            .map_err(|e| wrap_io_err(e, &path_owned))
+    })
+    .await
+    {
+        Ok(res) => res,
+        Err(e) => Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            format!(
+                "async wait failed while getting metadata of {:?}: {e}",
+                &path
+            ),
+        )),
+    }
+}
+
+async fn get_metadata_de(de: std::fs::DirEntry) -> std::io::Result<std::fs::Metadata> {
+    let de_path = de.path();
+    match tokio::task::spawn_blocking(move || de.metadata().map_err(|e| wrap_io_err(e, &de.path())))
+        .await
+    {
+        Ok(res) => res,
+        Err(e) => Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            format!(
+                "async wait failed while getting metadata of {:?}: {e}",
+                &de_path
+            ),
+        )),
+    }
+}
+
 async fn do_size_work(
     path: std::path::PathBuf,
     meta: std::fs::Metadata,
@@ -55,7 +91,7 @@ async fn do_size_work(
 pub async fn size(path: &str) -> std::io::Result<u64> {
     let mut total_size = 0;
     let path_pb = std::path::PathBuf::from(path);
-    let path_meta = path_pb.metadata().map_err(|e| wrap_io_err(e, &path_pb))?;
+    let path_meta = get_metadata(&path_pb).await?;
     let mut js = tokio::task::JoinSet::new();
     js.spawn(do_size_work(path_pb, path_meta));
     while let Some(join_res) = js.join_next().await {
@@ -65,7 +101,7 @@ pub async fn size(path: &str) -> std::io::Result<u64> {
                     total_size += size;
                     for dir_entry in work {
                         let e_path = dir_entry.path();
-                        let e_meta = dir_entry.metadata().map_err(|e| wrap_io_err(e, &e_path))?;
+                        let e_meta = get_metadata_de(dir_entry).await?;
                         js.spawn(do_size_work(e_path, e_meta));
                     }
                 }
@@ -100,14 +136,10 @@ async fn copy_file_chunk(
 
 async fn copy_file(
     src: std::path::PathBuf,
-    src_meta_cache: Option<std::fs::Metadata>,
+    src_meta: std::fs::Metadata,
     dst: std::path::PathBuf,
     chunk_size: u64,
 ) -> std::io::Result<()> {
-    let src_meta = match src_meta_cache {
-        Some(m) => m,
-        None => src.metadata().map_err(|e| wrap_io_err(e, &src))?,
-    };
     let src_len = src_meta.len();
     let fw = std::fs::File::options()
         .write(true)
@@ -165,19 +197,19 @@ async fn do_copy_work(
             let e_path = entry.path();
             let e_base_name = entry.file_name();
             let e_dst_path = dst.join(e_base_name);
-            let e_meta = entry.metadata().map_err(|e| wrap_io_err(e, &e_path))?;
+            let e_meta = get_metadata_de(entry).await?;
             work.push((e_meta, e_path, e_dst_path));
         }
         Ok(work)
     } else {
-        copy_file(src, Some(src_meta), dst, chunk_size).await?;
+        copy_file(src, src_meta, dst, chunk_size).await?;
         Ok(vec![])
     }
 }
 
 pub async fn copy(src: &str, dst: &str, chunk_size: u64) -> std::io::Result<()> {
     let src_path = std::path::Path::new(&src);
-    let src_meta = src_path.metadata().map_err(|e| wrap_io_err(e, src_path))?;
+    let src_meta = get_metadata(src_path).await?;
     let dst_pathbuf = if dst.ends_with("/") {
         let src_bname = match src_path.file_name() {
             Some(bname_oss) => bname_oss.to_string_lossy().to_string(),
@@ -223,7 +255,7 @@ fn do_remove_work(
             let mut js = tokio::task::JoinSet::new();
             for entry in entries {
                 let e_path = entry.path();
-                let e_meta = entry.metadata().map_err(|e| wrap_io_err(e, &e_path))?;
+                let e_meta = get_metadata_de(entry).await?;
                 js.spawn(do_remove_work(e_path, e_meta));
             }
 
@@ -267,7 +299,7 @@ fn do_remove_work(
 
 pub async fn remove(path: &str) -> std::io::Result<()> {
     let path_pb = std::path::PathBuf::from(path);
-    let path_meta = path_pb.metadata().map_err(|e| wrap_io_err(e, &path_pb))?;
+    let path_meta = get_metadata(&path_pb).await?;
     do_remove_work(path_pb, path_meta).await?;
     Ok(())
 }
