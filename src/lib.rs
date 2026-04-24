@@ -83,18 +83,22 @@ async fn do_size_work(
 pub async fn size(path: &str) -> std::io::Result<u64> {
     let mut total_size = 0;
     let path_pb = std::path::PathBuf::from(path);
-    let path_meta = get_metadata(path_pb.clone()).await?;
     let mut js = tokio::task::JoinSet::new();
-    js.spawn(do_size_work(path_pb, path_meta));
+    js.spawn(async move {
+        let path_meta = get_metadata(path_pb.clone()).await?;
+        do_size_work(path_pb, path_meta).await
+    });
     while let Some(join_res) = js.join_next().await {
         match join_res {
             Ok(task_res) => match task_res {
                 Ok((size, work)) => {
                     total_size += size;
                     for dir_entry in work {
-                        let e_path = dir_entry.path();
-                        let e_meta = get_metadata_de(dir_entry).await?;
-                        js.spawn(do_size_work(e_path, e_meta));
+                        js.spawn(async move {
+                            let e_path = dir_entry.path();
+                            let e_meta = get_metadata_de(dir_entry).await?;
+                            do_size_work(e_path, e_meta).await
+                        });
                     }
                 }
                 Err(e) => log::warn!("getting size of entry failed: {e}"),
@@ -179,6 +183,7 @@ async fn do_copy_work(
         std::fs::create_dir_all(&dst).map_err(|e| wrap_io_err(e, &src))?;
         let entries = list_dir(src).await?;
         let mut work = Vec::with_capacity(entries.len());
+
         for entry in entries {
             let e_path = entry.path();
             let e_base_name = entry.file_name();
