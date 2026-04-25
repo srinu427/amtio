@@ -20,8 +20,8 @@ fn human_size(size: u64) -> String {
         size_pref += 1;
     }
     format!(
-        "{size_div}.{}{}",
-        size_rem * 100 / 1024,
+        "{size_div}.{:02}{}",
+        (size_rem * 100 / 1024).min(99),
         SIZE_PREFS[size_pref]
     )
 }
