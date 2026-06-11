@@ -146,7 +146,13 @@ pub fn main() {
                             tokio::time::sleep(Duration::from_millis(500)).await;
                         }
                     });
-                    match amtio_lib::size(&path.to_string_lossy(), curr_size).await {
+                    match amtio_lib::size(
+                        &path.to_string_lossy(),
+                        size_args.threads.unwrap_or(512),
+                        curr_size,
+                    )
+                    .await
+                    {
                         Ok(size) => {
                             stop_print.store(true, Ordering::Release);
                             let _ = jh.await;

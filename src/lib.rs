@@ -82,6 +82,7 @@ async fn do_size_work(
 
 pub async fn size(
     path: &str,
+    threads: usize,
     tracker: std::sync::Arc<std::sync::atomic::AtomicU64>,
 ) -> std::io::Result<u64> {
     let mut total_size = 0;
@@ -98,11 +99,18 @@ pub async fn size(
                     total_size += size;
                     tracker.fetch_add(size, std::sync::atomic::Ordering::Relaxed);
                     for dir_entry in work {
-                        js.spawn(async move {
+                        if js.len() < threads {
+                            js.spawn(async move {
+                                let e_path = dir_entry.path();
+                                let e_meta = get_metadata_de(dir_entry).await?;
+                                do_size_work(e_path, e_meta).await
+                            });
+                        } else {
                             let e_path = dir_entry.path();
                             let e_meta = get_metadata_de(dir_entry).await?;
-                            do_size_work(e_path, e_meta).await
-                        });
+                            let res = do_size_work(e_path, e_meta).await;
+                            js.spawn(async move { res });
+                        }
                     }
                 }
                 Err(e) => log::warn!("getting size of entry failed: {e}"),
